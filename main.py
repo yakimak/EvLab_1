@@ -174,7 +174,7 @@ def experiment_series(configs: List[GAConfig], n_runs: int = N_RUNS) -> dict:
 
 
 def save_results_csv(results: dict, path: str):
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["config", "run", "best_f", "mean_f", "std_f", "median_f", "worst_f"])
         for tag, data in results.items():
@@ -187,7 +187,7 @@ def save_results_csv(results: dict, path: str):
 
 
 def save_random_csv(bests: np.ndarray, path: str):
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["method", "run", "best_f", "mean_f", "std_f", "median_f", "worst_f"])
         w.writerow(["random_search", "summary",
@@ -238,6 +238,165 @@ def plot_comparison(results: dict, path: str):
     plt.close()
 
 
+def save_histories(results: dict, path: str):
+    """Сохраняет траектории сходимости для последующей перестройки графиков."""
+    payload = {}
+    for tag, data in results.items():
+        payload[f"{tag}__best"] = data["hist_best"]
+        payload[f"{tag}__mean"] = data["hist_mean"]
+    np.savez_compressed(path, **payload)
+
+
+def plot_flowchart(path: str):
+    """Блок-схема генетического алгоритма (графическое представление)."""
+    from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+
+    fig, ax = plt.subplots(figsize=(12.5, 11))
+    ax.set_xlim(0, 14)
+    ax.set_ylim(0, 11.6)
+    ax.axis("off")
+
+    def box(x, y, w, h, text, color="#EAF2FB", edge="#2F5D8A", fs=10):
+        p = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.08,rounding_size=0.15",
+                           linewidth=1.6, edgecolor=edge, facecolor=color)
+        ax.add_patch(p)
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center",
+                fontsize=fs, color="#12263A")
+
+    def arrow(x1, y1, x2, y2, text="", color="#2F5D8A", fs=8.5, ha="left"):
+        a = FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="-|>", mutation_scale=15,
+                            linewidth=1.6, color=color,
+                            connectionstyle="arc3,rad=0.0")
+        ax.add_patch(a)
+        if text:
+            ax.text((x1 + x2) / 2 + 0.15, (y1 + y2) / 2, text, fontsize=fs,
+                    color=color, ha=ha, va="center")
+
+    ax.text(7, 11.2, "Блок-схема генетического алгоритма (ЛР №1, функция Экли, d = 9)",
+            ha="center", va="center", fontsize=15, fontweight="bold", color="#12263A")
+
+    cx, w = 4.0, 5.5
+    steps = [
+        ("Старт\n(seed = 42…61)", 10.3, "#EAF2FB", "#2F5D8A"),
+        ("Инициализация популяции\nравномерно в [−32.768, 32.768]", 9.4, "#EAF2FB", "#2F5D8A"),
+        ("Оценка фитнес-функции f(x)\n(функция Экли)", 8.5, "#EAF2FB", "#2F5D8A"),
+        ("Элитизм: сохранить 2 лучшие особи", 7.3, "#EAF2FB", "#2F5D8A"),
+        ("Турнирная селекция родителей (k = 3)", 6.4, "#EAF2FB", "#2F5D8A"),
+        ("SBX-кроссовер (p = 0.9, η = 15)", 5.5, "#EAF2FB", "#2F5D8A"),
+        ("Гауссова мутация\n(p_mut, σ = 0.15·(u−l))", 4.6, "#EAF2FB", "#2F5D8A"),
+        ("Обработка выхода за границы\n(отражение / clip)", 3.7, "#EAF2FB", "#2F5D8A"),
+        ("Новая популяция и оценка фитнеса", 2.8, "#FEF9E7", "#B7950B"),
+        ("Достигнуто 300 поколений?", 1.7, "#EAF2FB", "#2F5D8A"),
+        ("Вывод лучшего решения (x*, f(x*))\nи графиков", 0.45, "#E8F8F5", "#117A65"),
+    ]
+    for text, y, color, edge in steps:
+        box(cx, y, w, 0.72, text, color=color, edge=edge)
+
+    for i in range(len(steps) - 2):
+        y_from = steps[i][1]
+        y_to = steps[i + 1][1] + 0.72
+        arrow(cx + w / 2, y_from, cx + w / 2, y_to)
+
+    # Ветка «да»: остановка
+    arrow(cx + w / 2, 1.7, cx + w / 2, 1.17, text="да", ha="left")
+
+    # Ветка «нет»: возврат к элитизму по правой стороне
+    loop_x = 11.8
+    arrow(cx + w, 2.06, loop_x, 2.06, color="#B03A2E")
+    arrow(loop_x, 2.06, loop_x, 7.66, color="#B03A2E")
+    arrow(loop_x, 7.66, cx + w, 7.66, color="#B03A2E")
+    ax.text(loop_x + 0.15, 4.9, "нет:\nследующее\nпоколение", fontsize=9,
+            color="#B03A2E", ha="left", va="center")
+
+    plt.tight_layout()
+    plt.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close()
+
+
+def plot_dashboard(results: dict, rs_bests: np.ndarray, path: str):
+    """Сводный дашборд: сходимость, распределение, средние и таблица статистик."""
+    from matplotlib.gridspec import GridSpec
+
+    tags = list(results.keys())
+    colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+
+    fig = plt.figure(figsize=(17, 10.5))
+    gs = GridSpec(2, 3, figure=fig, hspace=0.38, wspace=0.30,
+                  height_ratios=[1.05, 1.0])
+    fig.suptitle("ЛР №1 · Генетический алгоритм на функции Экли (d = 9) · 20 независимых запусков",
+                 fontsize=16, fontweight="bold", color="#12263A", y=0.98)
+
+    ax1 = fig.add_subplot(gs[0, :2])
+    for tag, color in zip(tags, colors):
+        hb = results[tag]["hist_best"]
+        mean_curve = hb.mean(axis=0)
+        std_curve = hb.std(axis=0)
+        gens = np.arange(len(mean_curve))
+        ax1.plot(gens, np.maximum(mean_curve, 1e-5), color=color, label=tag, linewidth=2)
+        ax1.fill_between(gens, np.maximum(mean_curve - std_curve, 1e-5),
+                         np.maximum(mean_curve + std_curve, 1e-5), color=color, alpha=0.13)
+    ax1.axhline(max(REFERENCE_BEST, 1e-5), color="k", linestyle="--", linewidth=1,
+                label="глобальный минимум = 0")
+    ax1.set_yscale("log")
+    ax1.set_xlabel("Поколение")
+    ax1.set_ylabel("Лучшее f(x) (log scale)")
+    ax1.set_title("Кривые сходимости: среднее ± std по 20 запускам")
+    ax1.grid(alpha=0.3, which="both")
+    ax1.legend(fontsize=9)
+
+    ax2 = fig.add_subplot(gs[0, 2])
+    data = [results[t]["bests"] for t in tags] + [rs_bests]
+    labels = tags + ["random\nsearch"]
+    bp = ax2.boxplot(data, patch_artist=True, widths=0.6)
+    for patch, color in zip(bp["boxes"], colors + ["#7F8C8D"]):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.72)
+    ax2.set_xticklabels(labels, rotation=35, ha="right", fontsize=8.5)
+    ax2.set_ylabel("Лучшее f(x) за запуск")
+    ax2.set_title("Разброс результатов")
+    ax2.grid(alpha=0.3, axis="y")
+
+    ax3 = fig.add_subplot(gs[1, :2])
+    means = [results[t]["bests"].mean() for t in tags] + [rs_bests.mean()]
+    stds = [results[t]["bests"].std() for t in tags] + [rs_bests.std()]
+    xpos = np.arange(len(means))
+    bars = ax3.bar(xpos, means, yerr=stds, capsize=6,
+                   color=colors + ["#7F8C8D"], alpha=0.82, edgecolor="white")
+    for bar, m in zip(bars, means):
+        ax3.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.25,
+                 f"{m:.2f}", ha="center", va="bottom", fontsize=9, color="#12263A")
+    ax3.set_xticks(xpos)
+    ax3.set_xticklabels(labels, rotation=20, ha="right")
+    ax3.set_ylabel("Среднее лучшее f(x)")
+    ax3.set_title("Средний результат (чем ниже, тем лучше)")
+    ax3.grid(alpha=0.3, axis="y")
+
+    ax4 = fig.add_subplot(gs[1, 2])
+    ax4.axis("off")
+    cell_text = []
+    for tag in tags:
+        b = results[tag]["bests"]
+        cell_text.append([tag, f"{b.min():.3g}", f"{b.mean():.3g}", f"{np.median(b):.3g}"])
+    cell_text.append(["random", f"{rs_bests.min():.3g}", f"{rs_bests.mean():.3g}",
+                      f"{np.median(rs_bests):.3g}"])
+    table = ax4.table(cellText=cell_text,
+                      colLabels=["конфиг", "min", "mean", "median"],
+                      loc="center", cellLoc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(8.5)
+    table.scale(1.0, 1.55)
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_facecolor("#2F5D8A")
+            cell.set_text_props(color="white", fontweight="bold")
+        elif row % 2 == 0:
+            cell.set_facecolor("#F2F6FA")
+    ax4.set_title("Сводная статистика (f(x))", pad=18)
+
+    plt.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close()
+
+
 def main():
     os.makedirs("lab1_out", exist_ok=True)
 
@@ -252,8 +411,10 @@ def main():
     print("Запуск серии экспериментов ГА...")
     ga_results = experiment_series(cfgs, n_runs=N_RUNS)
     save_results_csv(ga_results, "lab1_out/lab1_results.csv")
+    save_histories(ga_results, "lab1_out/lab1_histories.npz")
     plot_convergence(ga_results, "lab1_out/lab1_convergence.png")
     plot_comparison(ga_results, "lab1_out/lab1_comparison.png")
+    plot_flowchart("lab1_out/lab1_block_schema.png")
 
     # --- Сравнение со случайным поиском ---
     budget = cfgs[0].pop_size * cfgs[0].max_gens  # равный бюджет оценок
@@ -263,6 +424,7 @@ def main():
         rs_bests.append(rs["best"])
     rs_bests = np.array(rs_bests)
     save_random_csv(rs_bests, "lab1_out/lab1_random.csv")
+    plot_dashboard(ga_results, rs_bests, "lab1_out/lab1_dashboard.png")
 
     # --- Итоговая сводка ---
     print("\n=== Сводка по 20 запускам ===")
